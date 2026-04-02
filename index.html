@@ -5,11 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF Cleaner App</title>
   
+  <!-- Tailwind CSS for styling -->
   <script src="https://cdn.tailwindcss.com"></script>
   
+  <!-- React and ReactDOM -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   
+  <!-- Babel to translate JSX in the browser -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <style>
@@ -124,17 +127,23 @@
             const pageHeight = viewport.height;
             const pageWidth = viewport.width;
 
+            // NEW: Improved spatial text grouping
+            const items = textContent.items.map(item => ({
+              text: item.str,
+              x: item.transform[4],
+              y: Math.round(item.transform[5])
+            }));
+
             const lines = [];
-            textContent.items.forEach(item => {
-              if (!item.str || item.str.trim() === '') return;
-              const y = Math.round(item.transform[5]);
-              let existingLine = lines.find(l => Math.abs(l.y - y) < 4);
-              
+            items.forEach(item => {
+              if (!item.text || item.text.trim() === '') return;
+              // Group text that is roughly on the same horizontal line (within 6 points)
+              let existingLine = lines.find(l => Math.abs(l.y - item.y) < 6);
               if (existingLine) {
-                existingLine.text += ' ' + item.str;
-                existingLine.y = Math.max(existingLine.y, item.transform[5]);
+                existingLine.items.push(item);
+                existingLine.y = Math.max(existingLine.y, item.y);
               } else {
-                lines.push({ text: item.str, y: item.transform[5] });
+                lines.push({ items: [item], y: item.y });
               }
             });
 
@@ -143,29 +152,55 @@
             let footerTopY = null;
 
             lines.forEach(line => {
-              const text = line.text.toUpperCase();
+              // Sort text items left-to-right to ensure sentence structure is correct
+              line.items.sort((a, b) => a.x - b.x);
+              line.text = line.items.map(i => i.text.trim()).filter(t => t).join(' ');
+              
+              // Normalize text (convert to upper case and compress multiple spaces into one)
+              const normalizedText = line.text.toUpperCase().replace(/\s+/g, ' ');
               const y = line.y;
 
-              if (text.includes("DAFTAR BARANG") || text.includes("MILIK NEGARA PADA") || text.includes("STATUS PENGGUNAANNYA")) {
+              // Title Detection
+              if (normalizedText.includes("DAFTAR BARANG") || normalizedText.includes("MILIK NEGARA PADA") || normalizedText.includes("STATUS PENGGUNAANNYA")) {
                 if (titleY === null || y > titleY) titleY = y;
               }
-              if (text.includes("LAMPIRAN") || text.includes("KEPUTUSAN MENTERI") || text.includes("TENTANG PENETAPAN")) {
+              
+              // Header Detection
+              if (normalizedText.includes("LAMPIRAN") || normalizedText.includes("KEPUTUSAN MENTERI") || normalizedText.includes("TENTANG PENETAPAN")) {
                 isHeaderPage = true;
               }
-              if (y < pageHeight / 2) {
-                if (text.includes("A.N. MENTERI") || text.includes("A.N.  MENTERI") || text.includes("KEPALA KANTOR") || text.includes("DITANDATANGANI") || text.includes("I KETUT ARIMBAWA")) {
+              
+              // Footer/Signature Detection (Only look in the bottom 75% of the page)
+              if (y < pageHeight * 0.75) {
+                // NEW: Smart Regex matching. This matches any variation of "a.n. Menteri"
+                // It also checks for "Kepala Kantor" just in case "a.n." is missing entirely
+                const isSignature = 
+                  /A\s*\.?\s*N\s*\.?\s*MENTERI/i.test(normalizedText) || 
+                  normalizedText.includes("KEPALA KANTOR PELAYANAN") || 
+                  normalizedText.includes("LELANG DENPASAR") || 
+                  normalizedText.includes("DITANDATANGANI") || 
+                  normalizedText.includes("ARIMBAWA");
+                
+                if (isSignature) {
+                  // Keep track of the HIGHEST text belonging to the signature block
                   if (footerTopY === null || y > footerTopY) footerTopY = y;
                 }
               }
             });
 
             const rects = [];
+            
+            // Delete Top Header
             if (titleY !== null && isHeaderPage) {
               rects.push({ x: 0, y: titleY + 18, width: pageWidth, height: pageHeight - titleY });
             }
+            
+            // Delete Bottom Signature
             if (footerTopY !== null) {
-              rects.push({ x: 0, y: 0, width: pageWidth, height: footerTopY + 20 });
+              // Draw a white rectangle from the very bottom (0) up to slightly above the signature block
+              rects.push({ x: 0, y: 0, width: pageWidth, height: footerTopY + 16 });
             }
+            
             if (rects.length > 0) redactions.push({ pageIndex: i - 1, rects });
           }
 
@@ -296,7 +331,7 @@
             </div>
 
             {error && (
-              <div className="rounded-2xl bg-red-50 p-4 border border-red-100">
+              <div className="rounded-2xl bg-red-50 p-4 border border-red-100 mt-4">
                 <div className="flex">
                   <svg className="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"></path></svg>
                   <div className="ml-3 text-sm font-medium text-red-800">{error}</div>
