@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Cleaner App</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(16, 185, 129, 0.1); border-radius: 10px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(16, 185, 129, 0.3); border-radius: 10px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(16, 185, 129, 0.5); }
+    
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up {
+      animation: fadeInUp 0.4s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-green-50 via-emerald-50 to-teal-100 min-h-screen">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    function App() {
+      const [file, setFile] = useState(null);
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [processedUrl, setProcessedUrl] = useState(null);
+      const [processedBytes, setProcessedBytes] = useState(null);
+      const [error, setError] = useState('');
+      const [libsLoaded, setLibsLoaded] = useState(false);
+      const [isDragging, setIsDragging] = useState(false);
+      const fileInputRef = useRef(null);
+      const previewContainerRef = useRef(null);
+
+      useEffect(() => {
+        let pdfLibLoaded = false;
+        let pdfjsLoaded = false;
+
+        const checkReady = () => {
+          if (pdfLibLoaded && pdfjsLoaded) setLibsLoaded(true);
+        };
+
+        const scriptPdfLib = document.createElement('script');
+        scriptPdfLib.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
+        scriptPdfLib.onload = () => { pdfLibLoaded = true; checkReady(); };
+        document.body.appendChild(scriptPdfLib);
+
+        const scriptPdfJs = document.createElement('script');
+        scriptPdfJs.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
+        scriptPdfJs.onload = () => {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+          pdfjsLoaded = true;
+          checkReady();
+        };
+        document.body.appendChild(scriptPdfJs);
+
+        return () => {
+          if (processedUrl) URL.revokeObjectURL(processedUrl);
+        };
+      }, []);
+
+      const handleFileSelection = (selectedFile) => {
+        if (selectedFile && selectedFile.type === 'application/pdf') {
+          setFile(selectedFile);
+          setProcessedUrl(null);
+          setProcessedBytes(null);
+          setError('');
+        } else {
+          setError('Please upload a valid PDF file.');
+          setFile(null);
+        }
+      };
+
+      const handleFileChange = (e) => handleFileSelection(e.target.files[0]);
+      const onDragOver = (e) => e.preventDefault();
+      const onDragEnter = (e) => { e.preventDefault(); setIsDragging(true); };
+      const onDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+      const onDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          handleFileSelection(e.dataTransfer.files[0]);
+        }
+      };
+
+      const clearFile = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setFile(null);
+        setProcessedUrl(null);
+        setProcessedBytes(null);
+        setError('');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      };
+
+      const processPdf = async () => {
+        if (!file || !libsLoaded) return;
+        setIsProcessing(true);
+        setError('');
+
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          const pdfjs = window.pdfjsLib;
+          const pdfDoc = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+          const redactions = [];
+
+          for (let i = 1; i <= pdfDoc.numPages; i++) {
+            const page = await pdfDoc.getPage(i);
+            const viewport = page.getViewport({ scale: 1 });
+            const textContent = await page.getTextContent();
+            const pageHeight = viewport.height;
+            const pageWidth = viewport.width;
+
+            const lines = [];
+            textContent.items.forEach(item => {
+              if (!item.str || item.str.trim() === '') return;
+              const y = Math.round(item.transform[5]);
+              let existingLine = lines.find(l => Math.abs(l.y - y) < 4);
+              
+              if (existingLine) {
+                existingLine.text += ' ' + item.str;
+                existingLine.y = Math.max(existingLine.y, item.transform[5]);
+              } else {
+                lines.push({ text: item.str, y: item.transform[5] });
+              }
+            });
+
+            let titleY = null;
+            let isHeaderPage = false;
+            let footerTopY = null;
+
+            lines.forEach(line => {
+              const text = line.text.toUpperCase();
+              const y = line.y;
+
+              if (text.includes("DAFTAR BARANG") || text.includes("MILIK NEGARA PADA") || text.includes("STATUS PENGGUNAANNYA")) {
+                if (titleY === null || y > titleY) titleY = y;
+              }
+              if (text.includes("LAMPIRAN") || text.includes("KEPUTUSAN MENTERI") || text.includes("TENTANG PENETAPAN")) {
+                isHeaderPage = true;
+              }
+              if (y < pageHeight / 2) {
+                if (text.includes("A.N. MENTERI") || text.includes("A.N.  MENTERI") || text.includes("KEPALA KANTOR") || text.includes("DITANDATANGANI") || text.includes("I KETUT ARIMBAWA")) {
+                  if (footerTopY === null || y > footerTopY) footerTopY = y;
+                }
+              }
+            });
+
+            const rects = [];
+            if (titleY !== null && isHeaderPage) {
+              rects.push({ x: 0, y: titleY + 18, width: pageWidth, height: pageHeight - titleY });
+            }
+            if (footerTopY !== null) {
+              rects.push({ x: 0, y: 0, width: pageWidth, height: footerTopY + 20 });
+            }
+            if (rects.length > 0) redactions.push({ pageIndex: i - 1, rects });
+          }
+
+          const { PDFDocument, rgb } = window.PDFLib;
+          const pdfDocMod = await PDFDocument.load(arrayBuffer);
+
+          for (const redaction of redactions) {
+            const page = pdfDocMod.getPage(redaction.pageIndex);
+            for (const rect of redaction.rects) {
+              page.drawRectangle({
+                x: rect.x, y: rect.y, width: rect.width, height: rect.height, color: rgb(1, 1, 1), 
+              });
+            }
+          }
+
+          const modifiedPdfBytes = await pdfDocMod.save();
+          const blob = new Blob([modifiedPdfBytes], { type: 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+          
+          setProcessedUrl(url);
+          setProcessedBytes(modifiedPdfBytes);
+
+        } catch (err) {
+          console.error("PDF Processing Error:", err);
+          setError("Failed to process the PDF. Please ensure it is a valid text-based PDF.");
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      useEffect(() => {
+        if (!processedBytes || !previewContainerRef.current) return;
+        
+        let isMounted = true;
+        const renderPreview = async () => {
+          const container = previewContainerRef.current;
+          container.innerHTML = ''; 
+
+          try {
+            const pdfjs = window.pdfjsLib;
+            const pdf = await pdfjs.getDocument({ data: processedBytes }).promise;
+            const maxPagesToPreview = Math.min(pdf.numPages, 3);
+
+            for (let i = 1; i <= maxPagesToPreview; i++) {
+              if (!isMounted) break;
+              const page = await pdf.getPage(i);
+              const viewport = page.getViewport({ scale: 1.5 });
+              const canvas = document.createElement('canvas');
+              canvas.className = 'mb-8 shadow-xl rounded-lg border border-emerald-100 bg-white';
+              canvas.style.width = "100%";
+              canvas.style.maxWidth = `${viewport.width}px`;
+              
+              const context = canvas.getContext('2d');
+              canvas.height = viewport.height;
+              canvas.width = viewport.width;
+              
+              container.appendChild(canvas);
+              await page.render({ canvasContext: context, viewport }).promise;
+            }
+
+            if (isMounted && pdf.numPages > 3) {
+              const noteContainer = document.createElement('div');
+              noteContainer.className = 'text-center mt-2 pb-6';
+              noteContainer.innerHTML = `
+                <span class="inline-flex items-center px-4 py-2 rounded-full text-sm font-medium bg-emerald-100 text-emerald-800">
+                  <svg class="mr-2 h-4 w-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"></path></svg>
+                  + ${pdf.numPages - 3} more pages. Download to view full document.
+                </span>
+              `;
+              container.appendChild(noteContainer);
+            }
+
+          } catch (err) {
+            console.error("Preview rendering failed", err);
+            if (isMounted && container) {
+               container.innerHTML = '<div class="text-emerald-700 p-4 text-center mt-10">Preview unavailable, but your file is ready! Please click <b>Download PDF</b>.</div>';
+            }
+          }
+        };
+
+        renderPreview();
+        return () => { isMounted = false; };
+      }, [processedBytes]);
+
+      return (
+        <div className="flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8 font-sans transition-all">
+          <div className="max-w-4xl w-full space-y-8 bg-white/90 backdrop-blur-md p-8 sm:p-12 rounded-[2rem] shadow-2xl border border-white/50">
+            
+            <div className="text-center space-y-3">
+              <div className="inline-flex items-center justify-center p-3 bg-emerald-100 rounded-2xl mb-2 text-emerald-600">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+              </div>
+              <h2 className="text-4xl font-extrabold text-emerald-950 tracking-tight">PDF Table Extractor</h2>
+              <p className="text-base text-emerald-700/80 max-w-2xl mx-auto">
+                Securely remove headers and signature blocks from your documents. Processing happens entirely on your device.
+              </p>
+            </div>
+
+            <div 
+              onDragOver={onDragOver} onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDrop={onDrop}
+              className={`mt-10 flex justify-center px-6 pt-8 pb-10 border-2 border-dashed rounded-3xl transition-all duration-300 ease-in-out ${
+                isDragging ? 'border-emerald-600 bg-emerald-100 shadow-inner scale-[1.02]' : file ? 'border-emerald-400 bg-emerald-50/50 shadow-inner' : 'border-emerald-200 bg-emerald-50/20 hover:bg-emerald-50/50 hover:border-emerald-300'
+              }`}
+            >
+              <div className="space-y-3 text-center pointer-events-none">
+                <svg className={`mx-auto h-14 w-14 transition-colors ${isDragging ? 'text-emerald-600' : file ? 'text-emerald-500' : 'text-emerald-300'}`} stroke="currentColor" fill="none" viewBox="0 0 48 48"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                <div className="flex text-sm text-emerald-800 justify-center font-medium pointer-events-auto">
+                  <label htmlFor="file-upload" className="relative cursor-pointer rounded-md text-emerald-600 hover:text-emerald-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-emerald-500 transition-colors">
+                    <span className="underline decoration-emerald-300 decoration-2 underline-offset-4">Browse for a file</span>
+                    <input id="file-upload" name="file-upload" type="file" accept=".pdf" className="sr-only" ref={fileInputRef} onChange={handleFileChange} />
+                  </label>
+                  <p className="pl-2">or drag and drop</p>
+                </div>
+                <p className="text-xs text-emerald-600/70">Secure local processing • PDF up to 10MB</p>
+                
+                {file && (
+                  <div className="pt-4 animate-fade-in-up flex items-center justify-center gap-3 pointer-events-auto">
+                    <span className="inline-flex items-center px-4 py-2 rounded-xl text-sm font-semibold bg-white text-emerald-900 border border-emerald-200 shadow-sm">
+                      <svg className="w-4 h-4 mr-2 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      <span className="truncate max-w-[200px] sm:max-w-xs">{file.name}</span>
+                    </span>
+                    <button type="button" onClick={clearFile} className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 hover:text-red-700 transition-colors shadow-sm border border-red-200 flex items-center justify-center" title="Remove file">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {error && (
+              <div className="rounded-2xl bg-red-50 p-4 border border-red-100">
+                <div className="flex">
+                  <svg className="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"></path></svg>
+                  <div className="ml-3 text-sm font-medium text-red-800">{error}</div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-center pt-2">
+              <button
+                onClick={processPdf} disabled={!file || isProcessing || !libsLoaded}
+                className={`flex items-center justify-center px-10 py-4 text-lg font-bold rounded-2xl text-white transition-all duration-300 transform ${
+                  !file || isProcessing || !libsLoaded ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-70' : 'bg-gradient-to-r from-green-800 to-green-950 hover:from-green-900 hover:to-[#022c22] shadow-xl hover:shadow-green-900/50 hover:-translate-y-0.5'
+                }`}
+              >
+                {isProcessing ? (
+                  <><svg className="animate-spin -ml-1 mr-3 h-6 w-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing Document...</>
+                ) : 'Clean Document'}
+              </button>
+            </div>
+
+            {processedUrl && (
+              <div className="mt-12 pt-10 border-t border-emerald-100 animate-fade-in-up">
+                <div className="flex flex-col sm:flex-row items-center justify-between mb-6 gap-4">
+                  <div>
+                    <h3 className="text-xl font-bold text-emerald-950">Sneak Peek Preview</h3>
+                    <p className="text-sm text-emerald-600">Showing up to 3 pages for performance</p>
+                  </div>
+                  <a href={processedUrl} download={`Cleaned_${file.name}`} className="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-xl shadow-md text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 transition-all hover:scale-105">
+                    <svg className="mr-2 -ml-1 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    Download Full PDF
+                  </a>
+                </div>
+                <div ref={previewContainerRef} className="bg-emerald-50/50 rounded-2xl border border-emerald-100 shadow-inner h-[650px] overflow-y-auto p-6 flex flex-col items-center custom-scrollbar">
+                  <div className="text-emerald-500 mt-10 animate-pulse font-medium flex items-center">
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    Generating preview canvases...
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
