@@ -1,33 +1,21 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF Lampiran Generator</title>
   
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
+  <!-- React & ReactDOM -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   
+  <!-- Babel for JSX compilation in browser -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <style>
-    .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: rgba(16, 185, 129, 0.1); border-radius: 10px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(16, 185, 129, 0.3); border-radius: 10px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(16, 185, 129, 0.5); }
-    
-    @keyframes fadeInUp {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .animate-fade-in-up {
-      animation: fadeInUp 0.4s ease-out forwards;
-    }
-  </style>
 </head>
-<body class="bg-gradient-to-br from-green-50 via-emerald-50 to-teal-100 min-h-screen">
+<body>
 
   <div id="root"></div>
 
@@ -42,11 +30,10 @@
       const [error, setError] = useState('');
       const [libsLoaded, setLibsLoaded] = useState(false);
       const [isDragging, setIsDragging] = useState(false);
-      const [deepClean, setDeepClean] = useState(true);
       const fileInputRef = useRef(null);
       const previewContainerRef = useRef(null);
 
-      // Load required PDF processing libraries via CDN
+      // Load PDF processing libraries via CDN
       useEffect(() => {
         let pdfLibLoaded = false;
         let pdfjsLoaded = false;
@@ -81,7 +68,7 @@
           setProcessedBytes(null);
           setError('');
         } else {
-          setError('Please upload a valid PDF file.');
+          setError('Mohon unggah file PDF yang valid.');
           setFile(null);
         }
       };
@@ -120,7 +107,6 @@
           
           const modifications = [];
 
-          // Pass 1: Analyze text and calculate coordinates
           for (let i = 1; i <= pdfDoc.numPages; i++) {
             const page = await pdfDoc.getPage(i);
             const viewport = page.getViewport({ scale: 1 });
@@ -134,10 +120,11 @@
               y: Math.round(item.transform[5])
             }));
 
+            // Gabungkan teks berdasarkan sumbu Y (Baris)
             const lines = [];
             items.forEach(item => {
               if (!item.text || item.text.trim() === '') return;
-              let existingLine = lines.find(l => Math.abs(l.y - item.y) < 6);
+              let existingLine = lines.find(l => Math.abs(l.y - item.y) < 5);
               if (existingLine) {
                 existingLine.items.push(item);
                 existingLine.y = Math.max(existingLine.y, item.y);
@@ -146,148 +133,139 @@
               }
             });
 
-            let titleY = null;
-            let isHeaderPage = false;
-            let footerTopY = null;
-            let lowestTableY = pageHeight; 
+            let tableTitleY = null;     
+            let headerY = null;
+            let lowestJumlahY = null;
+            let signatureYCandidates = [];
 
             lines.forEach(line => {
               line.items.sort((a, b) => a.x - b.x);
-              line.text = line.items.map(i => i.text.trim()).filter(t => t).join(' ');
-              const normalizedText = line.text.toUpperCase().replace(/\s+/g, ' ');
+              const fullText = line.items.map(i => i.text.trim()).join(' ');
+              const cleanText = fullText.toLowerCase().replace(/\s+/g, '');
               const y = line.y;
 
-              if (normalizedText.includes("DAFTAR BARANG") || normalizedText.includes("MILIK NEGARA PADA")) {
-                if (titleY === null || y > titleY) titleY = y;
-              }
-              if (normalizedText.includes("LAMPIRAN") || normalizedText.includes("KEPUTUSAN MENTERI")) {
-                isHeaderPage = true;
-              }
-
-              if (y < pageHeight * 0.75) {
-                const isSignature = 
-                  /A\s*\.?\s*N\s*\.?\s*MENTERI/i.test(normalizedText) || 
-                  normalizedText.includes("KEPALA KANTOR PELAYANAN") || 
-                  normalizedText.includes("LELANG DENPASAR") || 
-                  normalizedText.includes("DITANDATANGANI") || 
-                  normalizedText.includes("ARIMBAWA");
-
-                if (isSignature) {
-                  if (footerTopY === null || y > footerTopY) footerTopY = y;
-                } else if (y > 30 && y < lowestTableY && !normalizedText.includes("DAFTAR BARANG")) {
-                  lowestTableY = y;
+              // 1. Deteksi Judul Tabel (Penting untuk dipertahankan)
+              if (cleanText.includes("daftarbarang") || cleanText.includes("miliknegarapada")) {
+                if (tableTitleY === null || y > tableTitleY) {
+                  tableTitleY = y;
                 }
-              } else if (y < lowestTableY && y < pageHeight * 0.85) {
-                lowestTableY = y;
+              }
+
+              // 2. Deteksi Header Lampiran (Akan Dihapus dari Atas)
+              if (cleanText.includes("lampiran") || cleanText.includes("keputusanmenteri") || cleanText.includes("nomor")) {
+                 // Pastikan posisi header wajar (di bagian atas halaman)
+                 if (y > pageHeight * 0.5) {
+                     if (headerY === null || y < headerY) headerY = y;
+                 }
+              }
+
+              // 2.5 Deteksi Akhir Tabel (Jumlah) sebagai Proteksi Bawah Tabel
+              if (cleanText.includes("jumlah") && !cleanText.includes("halaman")) {
+                 if (lowestJumlahY === null || y < lowestJumlahY) {
+                     lowestJumlahY = y;
+                 }
+              }
+
+              // 3. Deteksi Jangkar Tanda Tangan (Keyword Mutlak Sesuai Arahan)
+              const hasAnRegex = /(^|\s)a\.?\s*n\.?(\s|$)/i.test(fullText);
+              const hasMenteriKeuangan = cleanText.includes("menterikeuangan") && !cleanText.includes("keputusan");
+              const hasKepalaKantor = cleanText.includes("kepalakantorpelayanan");
+              const hasDitandatangani = cleanText.includes("ditandatanganisecara");
+              const hasGamal = cleanText.includes("gamalhanif");
+              const hasArimbawa = cleanText.includes("arimbawa");
+
+              if (hasAnRegex || hasMenteriKeuangan || hasKepalaKantor || hasDitandatangani || hasGamal || hasArimbawa) {
+                signatureYCandidates.push(y);
               }
             });
 
-            const rects = [];
-            let newSignatureData = null;
+            // 4. Filter Jangkar Tanda Tangan agar tidak salah mendeteksi Header/Judul Tabel
+            let signatureAnchorY = null;
+            let validSignatureYs = signatureYCandidates.filter(sy => {
+                // Mencegah judul tabel terhapus jika ada kata kunci di header
+                if (tableTitleY !== null && sy > tableTitleY - 40) return false;
+                if (headerY !== null && sy > headerY - 40) return false;
+                // Mencegah data dalam tabel (di atas baris JUMLAH) terdeteksi sebagai tanda tangan
+                if (lowestJumlahY !== null && sy > lowestJumlahY - 5) return false;
+                return true;
+            });
 
-            if (titleY !== null && isHeaderPage) {
-              rects.push({ x: 0, y: titleY + 18, width: pageWidth, height: pageHeight - titleY });
+            if (validSignatureYs.length > 0) {
+                signatureAnchorY = Math.max(...validSignatureYs);
+            }
+
+            const rects = [];
+
+            // REDAKSI HEADER:
+            if (headerY !== null || tableTitleY !== null) {
+              let redactionBottom;
+              if (tableTitleY !== null) {
+                // Berhenti 15 poin tepat di ATAS judul tabel agar tabel sama sekali tidak tersentuh
+                redactionBottom = tableTitleY + 15;
+              } else if (headerY !== null) {
+                redactionBottom = headerY - 15;
+              } else {
+                redactionBottom = pageHeight;
+              }
+
+              if (redactionBottom < pageHeight) {
+                rects.push({ 
+                  x: 0, 
+                  y: redactionBottom, 
+                  width: pageWidth, 
+                  height: pageHeight - redactionBottom 
+                });
+              }
             }
             
-            if (footerTopY !== null) {
-              rects.push({ x: 0, y: 0, width: pageWidth, height: footerTopY + 16 });
-              
-              if (lowestTableY < 250) {
-                newSignatureData = { 
-                  needsNewPage: true, 
-                  pageWidth: pageWidth, 
-                  pageHeight: pageHeight 
-                };
-              } else {
-                const startY = lowestTableY - 75; 
-                newSignatureData = { y: startY, x: pageWidth - 260, needsNewPage: false };
-              }
+            // REDAKSI FOOTER / TANDA TANGAN:
+            let redactionTop = 40; // Default: Bersihkan nomor halaman di bawah
+
+            if (signatureAnchorY !== null) {
+              // Sapu bersih dari dasar kertas (y=0) hingga menutupi teks. 
+              // Karena Y adalah baseline (titik pijak) teks, +18 poin sudah sangat pas 
+              // untuk menutupi bagian pucuk/atas huruf kapital secara sempurna.
+              redactionTop = Math.max(redactionTop, signatureAnchorY + 18); 
             }
 
-            modifications.push({ pageIndex: i - 1, rects, newSignatureData });
+            // Lapis Keamanan Akhir: Kotak putih dari bawah jangan sampai menutupi Judul Tabel!
+            if (tableTitleY !== null && redactionTop > tableTitleY - 20) {
+              redactionTop = tableTitleY - 20;
+            }
+
+            // Lapis Keamanan Ekstra: Jangan sampai memakan baris "Jumlah" pada tabel.
+            // Margin ini dikurangi drastis menjadi -4 agar kotak putih bisa naik sedekat mungkin 
+            // dengan baris "Jumlah" untuk menelan sisa teks tanda tangan tanpa menghapus teks Jumlah itu sendiri.
+            if (lowestJumlahY !== null && redactionTop > lowestJumlahY - 4) {
+              redactionTop = lowestJumlahY - 4;
+            }
+
+            if (redactionTop > 0) {
+              rects.push({ 
+                x: 0, 
+                y: 0, 
+                width: pageWidth, 
+                height: redactionTop 
+              });
+            }
+
+            modifications.push({ pageIndex: i - 1, rects });
           }
 
-          // Pass 2: Edit PDF
-          const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
-          let finalPdfDoc;
-          
-          if (deepClean) {
-            // OPTIMIZED DEEP CLEAN: Rasterize with compression
-            finalPdfDoc = await PDFDocument.create();
-            const helveticaFont = await finalPdfDoc.embedFont(StandardFonts.Helvetica);
-            const blackColor = rgb(0, 0, 0);
-            const grayColor = rgb(0.55, 0.55, 0.55);
+          // Terapkan kotak putih ke file asli
+          const { PDFDocument, rgb } = window.PDFLib;
+          const finalPdfDoc = await PDFDocument.load(arrayBuffer);
 
-            for (const mod of modifications) {
-              const pdfjsPage = await pdfDoc.getPage(mod.pageIndex + 1);
-              const origViewport = pdfjsPage.getViewport({ scale: 1 });
-              
-              const viewport = pdfjsPage.getViewport({ scale: 1.3 });
-              const canvas = document.createElement('canvas');
-              canvas.width = viewport.width;
-              canvas.height = viewport.height;
-              const ctx = canvas.getContext('2d');
-              await pdfjsPage.render({ canvasContext: ctx, viewport }).promise;
-              
-              const imgBase64 = canvas.toDataURL('image/jpeg', 0.65);
-              const embeddedImage = await finalPdfDoc.embedJpg(imgBase64);
-
-              const newPage = finalPdfDoc.addPage([origViewport.width, origViewport.height]);
-              newPage.drawImage(embeddedImage, {
-                x: 0, y: 0, width: origViewport.width, height: origViewport.height,
+          for (const mod of modifications) {
+            const page = finalPdfDoc.getPage(mod.pageIndex);
+            for (const rect of mod.rects) {
+              page.drawRectangle({
+                x: rect.x, 
+                y: rect.y, 
+                width: rect.width, 
+                height: rect.height, 
+                color: rgb(1, 1, 1), 
               });
-
-              for (const rect of mod.rects) {
-                newPage.drawRectangle({
-                  x: rect.x, y: rect.y, width: rect.width, height: rect.height, color: rgb(1, 1, 1), 
-                });
-              }
-
-              if (mod.newSignatureData) {
-                let sigPage = newPage;
-                let sigY = mod.newSignatureData.y;
-                let sigX = mod.newSignatureData.needsNewPage ? mod.newSignatureData.pageWidth - 260 : mod.newSignatureData.x;
-
-                if (mod.newSignatureData.needsNewPage) {
-                  sigPage = finalPdfDoc.addPage([mod.newSignatureData.pageWidth, mod.newSignatureData.pageHeight]);
-                  sigY = mod.newSignatureData.pageHeight - 150;
-                }
-
-                sigPage.drawText('Kepala Seksi Pengelolaan Kekayaan Negara', { x: sigX, y: sigY, size: 11, font: helveticaFont, color: blackColor });
-                sigPage.drawText('Ditandatangani secara elektronik', { x: sigX, y: sigY - 125, size: 11, font: helveticaFont, color: grayColor });
-                sigPage.drawText('Gamal Hanif Rukmana', { x: sigX, y: sigY - 140, size: 11, font: helveticaFont, color: blackColor });
-              }
-            }
-          } else {
-            // STANDARD EDIT: Whiteout box only
-            finalPdfDoc = await PDFDocument.load(arrayBuffer);
-            const helveticaFont = await finalPdfDoc.embedFont(StandardFonts.Helvetica);
-            const blackColor = rgb(0, 0, 0);
-            const grayColor = rgb(0.55, 0.55, 0.55);
-
-            for (const mod of modifications) {
-              const page = finalPdfDoc.getPage(mod.pageIndex);
-              
-              for (const rect of mod.rects) {
-                page.drawRectangle({
-                  x: rect.x, y: rect.y, width: rect.width, height: rect.height, color: rgb(1, 1, 1), 
-                });
-              }
-
-              if (mod.newSignatureData) {
-                let sigPage = page;
-                let sigY = mod.newSignatureData.y;
-                let sigX = mod.newSignatureData.needsNewPage ? mod.newSignatureData.pageWidth - 260 : mod.newSignatureData.x;
-
-                if (mod.newSignatureData.needsNewPage) {
-                  sigPage = finalPdfDoc.addPage([mod.newSignatureData.pageWidth, mod.newSignatureData.pageHeight]);
-                  sigY = mod.newSignatureData.pageHeight - 150;
-                }
-
-                sigPage.drawText('Kepala Seksi Pengelolaan Kekayaan Negara', { x: sigX, y: sigY, size: 11, font: helveticaFont, color: blackColor });
-                sigPage.drawText('Ditandatangani secara elektronik', { x: sigX, y: sigY - 125, size: 11, font: helveticaFont, color: grayColor });
-                sigPage.drawText('Gamal Hanif Rukmana', { x: sigX, y: sigY - 140, size: 11, font: helveticaFont, color: blackColor });
-              }
             }
           }
 
@@ -299,14 +277,13 @@
           setProcessedBytes(modifiedPdfBytes);
 
         } catch (err) {
-          console.error("PDF Processing Error:", err);
-          setError("Failed to process the PDF. Please ensure it is a valid text-based PDF.");
+          console.error("Processing Error:", err);
+          setError("Gagal memproses PDF. Silakan coba lagi.");
         } finally {
           setIsProcessing(false);
         }
       };
 
-      // Canvas Preview Generation
       useEffect(() => {
         if (!processedBytes || !previewContainerRef.current) return;
         
@@ -318,16 +295,16 @@
           try {
             const pdfjs = window.pdfjsLib;
             const pdf = await pdfjs.getDocument({ data: processedBytes }).promise;
-            const maxPagesToPreview = Math.min(pdf.numPages, 3);
+            const maxPages = Math.min(pdf.numPages, 3);
 
-            for (let i = 1; i <= maxPagesToPreview; i++) {
+            for (let i = 1; i <= maxPages; i++) {
               if (!isMounted) break;
               const page = await pdf.getPage(i);
-              const viewport = page.getViewport({ scale: 1.5 });
+              const viewport = page.getViewport({ scale: 1.2 });
               const canvas = document.createElement('canvas');
-              canvas.className = 'mb-8 shadow-xl rounded-lg border border-emerald-100 bg-white';
+              canvas.className = 'mb-6 shadow-lg rounded border border-gray-200 bg-white';
               canvas.style.width = "100%";
-              canvas.style.maxWidth = `${viewport.width}px`;
+              canvas.style.maxWidth = "800px";
               
               const context = canvas.getContext('2d');
               canvas.height = viewport.height;
@@ -338,22 +315,13 @@
             }
 
             if (isMounted && pdf.numPages > 3) {
-              const noteContainer = document.createElement('div');
-              noteContainer.className = 'text-center mt-2 pb-6';
-              noteContainer.innerHTML = `
-                <span class="inline-flex items-center px-4 py-2 rounded-full text-sm font-medium bg-emerald-100 text-emerald-800">
-                  <svg class="mr-2 h-4 w-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"></path></svg>
-                  + ${pdf.numPages - 3} more pages. Download to view full document.
-                </span>
-              `;
-              container.appendChild(noteContainer);
+              const note = document.createElement('div');
+              note.className = 'text-center p-4 text-emerald-800 font-medium';
+              note.innerText = `+ ${pdf.numPages - 3} halaman lainnya tersedia di file unduhan.`;
+              container.appendChild(note);
             }
-
           } catch (err) {
-            console.error("Preview rendering failed", err);
-            if (isMounted && container) {
-               container.innerHTML = '<div class="text-emerald-700 p-4 text-center mt-10">Preview unavailable, but your file is ready! Please click <b>Download PDF</b>.</div>';
-            }
+            console.error(err);
           }
         };
 
@@ -362,101 +330,93 @@
       }, [processedBytes]);
 
       return (
-        <div className="flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8 font-sans transition-all min-h-screen bg-gradient-to-br from-green-50 via-emerald-50 to-teal-100">
+        <div className="flex flex-col items-center py-10 px-4 sm:px-6 min-h-screen bg-slate-50 font-sans">
           
-          <div className="max-w-4xl w-full space-y-8 bg-white/90 backdrop-blur-md p-8 sm:p-12 rounded-[2rem] shadow-2xl border border-white/50">
-            
-            <div className="text-center space-y-3">
-              <div className="inline-flex items-center justify-center p-3 bg-emerald-100 rounded-2xl mb-2 text-emerald-600">
+          <style>{`
+            .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+            .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+            .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+            .animate-fade-in-up { animation: fadeInUp 0.5s ease-out; }
+            @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+          `}</style>
+
+          <div className="max-w-3xl w-full bg-white p-8 rounded-3xl shadow-xl border border-slate-200">
+            <div className="text-center mb-8">
+              <div className="inline-block p-3 bg-emerald-100 text-emerald-600 rounded-2xl mb-4">
                 <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
               </div>
-              <h2 className="text-4xl font-extrabold text-emerald-950 tracking-tight">PDF Lampiran Generator</h2>
-              <p className="text-base text-emerald-700/80 max-w-2xl mx-auto">
-                Securely remove headers and rewrite signature blocks. Processing happens entirely on your device.
-              </p>
+              <h2 className="text-3xl font-bold text-slate-900">PDF Lampiran Generator</h2>
+              <p className="text-slate-600 mt-2">Menghapus Lampiran & Tanda Tangan dengan Presisi Tinggi tanpa memotong tabel Anda.</p>
             </div>
 
             <div 
               onDragOver={onDragOver} onDragEnter={onDragEnter} onDragLeave={onDragLeave} onDrop={onDrop}
-              className={`mt-10 flex justify-center px-6 pt-8 pb-10 border-2 border-dashed rounded-3xl transition-all duration-300 ease-in-out ${
-                isDragging ? 'border-emerald-600 bg-emerald-100 shadow-inner scale-[1.02]' : file ? 'border-emerald-400 bg-emerald-50/50 shadow-inner' : 'border-emerald-200 bg-emerald-50/20 hover:bg-emerald-50/50 hover:border-emerald-300'
+              className={`relative group cursor-pointer border-2 border-dashed rounded-2xl p-10 text-center transition-all ${
+                isDragging ? 'border-emerald-500 bg-emerald-50 scale-[1.01]' : 'border-slate-300 hover:border-emerald-400 hover:bg-slate-50'
               }`}
+              onClick={() => fileInputRef.current.click()}
             >
-              <div className="space-y-3 text-center pointer-events-none w-full">
-                <svg className={`mx-auto h-14 w-14 transition-colors ${isDragging ? 'text-emerald-600' : file ? 'text-emerald-500' : 'text-emerald-300'}`} stroke="currentColor" fill="none" viewBox="0 0 48 48"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                <div className="flex text-sm text-emerald-800 justify-center font-medium pointer-events-auto">
-                  <label htmlFor="file-upload" className="relative cursor-pointer rounded-md text-emerald-600 hover:text-emerald-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-emerald-500 transition-colors">
-                    <span className="underline decoration-emerald-300 decoration-2 underline-offset-4">Browse for a file</span>
-                    <input id="file-upload" name="file-upload" type="file" accept=".pdf" className="sr-only" ref={fileInputRef} onChange={handleFileChange} />
-                  </label>
-                  <p className="pl-2">or drag and drop</p>
+              <input type="file" accept=".pdf" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
+              
+              <div className="space-y-4">
+                <svg className={`mx-auto h-12 w-12 ${file ? 'text-emerald-500' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                <div className="text-slate-700 font-medium">
+                  {file ? file.name : 'Klik atau seret file PDF ke sini'}
                 </div>
-                <p className="text-xs text-emerald-600/70">Secure local processing • PDF up to 10MB</p>
-                
-                {file && (
-                  <div className="pt-4 animate-fade-in-up flex items-center justify-center gap-3 pointer-events-auto">
-                    <span className="inline-flex items-center px-4 py-2 rounded-xl text-sm font-semibold bg-white text-emerald-900 border border-emerald-200 shadow-sm">
-                      <svg className="w-4 h-4 mr-2 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                      <span className="truncate max-w-[200px] sm:max-w-xs">{file.name}</span>
-                    </span>
-                    <button type="button" onClick={clearFile} className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 hover:text-red-700 transition-colors shadow-sm border border-red-200 flex items-center justify-center" title="Remove file">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
-                  </div>
-                )}
+                <p className="text-xs text-slate-500">Hanya file PDF (Maks. 10MB)</p>
               </div>
+
+              {file && (
+                <button 
+                  onClick={clearFile}
+                  className="absolute top-4 right-4 p-2 bg-white text-slate-400 hover:text-red-500 rounded-full shadow-sm border border-slate-100 transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+              )}
             </div>
 
             {error && (
-              <div className="rounded-2xl bg-red-50 p-4 border border-red-100 mt-4">
-                <div className="flex">
-                  <svg className="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"></path></svg>
-                  <div className="ml-3 text-sm font-medium text-red-800">{error}</div>
-                </div>
+              <div className="mt-4 p-4 bg-red-50 border border-red-100 text-red-700 text-sm rounded-xl flex items-center">
+                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"></path></svg>
+                {error}
               </div>
             )}
 
-            <div className="flex flex-col items-center pt-6 w-full max-w-sm mx-auto">
-              <label className="flex items-center space-x-3 mb-6 cursor-pointer group">
-                <div className="relative">
-                  <input type="checkbox" className="sr-only" checked={deepClean} onChange={() => setDeepClean(!deepClean)} />
-                  <div className={`block w-12 h-7 rounded-full transition-colors ${deepClean ? 'bg-emerald-500' : 'bg-gray-300'}`}></div>
-                  <div className={`absolute left-1 top-1 bg-white w-5 h-5 rounded-full transition-transform shadow-sm ${deepClean ? 'transform translate-x-5' : ''}`}></div>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-sm font-bold text-emerald-950">Deep Clean Mode (Flatten)</span>
-                  <span className="text-xs text-emerald-700 max-w-[220px]">Destroys old text. Optimized for smaller file size.</span>
-                </div>
-              </label>
-
-              <button
-                onClick={processPdf} disabled={!file || isProcessing || !libsLoaded}
-                className={`flex items-center justify-center w-full px-10 py-4 text-lg font-bold rounded-2xl text-white transition-all duration-300 transform ${
-                  !file || isProcessing || !libsLoaded ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-70' : 'bg-gradient-to-r from-green-800 to-green-950 hover:from-green-900 hover:to-[#022c22] shadow-xl hover:shadow-green-900/50 hover:-translate-y-0.5'
-                }`}
-              >
-                {isProcessing ? (
-                  <><svg className="animate-spin -ml-1 mr-3 h-6 w-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Processing Document...</>
-                ) : 'Clean Document'}
-              </button>
-            </div>
+            <button
+              onClick={processPdf}
+              disabled={!file || isProcessing || !libsLoaded}
+              className={`mt-8 w-full py-4 px-6 rounded-2xl font-bold text-lg shadow-lg transition-all flex items-center justify-center ${
+                !file || isProcessing || !libsLoaded 
+                  ? 'bg-slate-200 text-slate-500 cursor-not-allowed' 
+                  : 'bg-emerald-600 text-white hover:bg-emerald-700 hover:shadow-emerald-200 active:scale-[0.98]'
+              }`}
+            >
+              {isProcessing ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                  Memproses...
+                </>
+              ) : 'Bersihkan Dokumen'}
+            </button>
 
             {processedUrl && (
-              <div className="mt-12 pt-10 border-t border-emerald-100 animate-fade-in-up">
-                <div className="flex flex-col sm:flex-row items-center justify-between mb-6 gap-4">
-                  <div>
-                    <h3 className="text-xl font-bold text-emerald-950">Sneak Peek Preview</h3>
-                    <p className="text-sm text-emerald-600">Showing up to 3 pages for performance</p>
-                  </div>
-                  <a href={processedUrl} download={`Cleaned_${file.name}`} className="inline-flex items-center px-6 py-3 border border-transparent text-base font-bold rounded-xl shadow-md text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 transition-all hover:scale-105">
-                    <svg className="mr-2 -ml-1 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                    Download Full PDF
+              <div className="mt-12 space-y-6 animate-fade-in-up">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                  <h3 className="text-xl font-bold text-slate-900">Hasil Pembersihan</h3>
+                  <a 
+                    href={processedUrl} 
+                    download={`${file.name.replace(/\.pdf$/i, '')}-ND.pdf`}
+                    className="bg-emerald-100 text-emerald-700 px-6 py-2 rounded-xl font-bold hover:bg-emerald-200 transition-colors flex items-center"
+                  >
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    Download PDF
                   </a>
                 </div>
-                <div ref={previewContainerRef} className="bg-emerald-50/50 rounded-2xl border border-emerald-100 shadow-inner h-[650px] overflow-y-auto p-6 flex flex-col items-center custom-scrollbar">
-                  <div className="text-emerald-500 mt-10 animate-pulse font-medium flex items-center">
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    Generating preview canvases...
+                
+                <div className="bg-slate-100 rounded-2xl p-4 h-[600px] overflow-y-auto custom-scrollbar border border-slate-200">
+                  <div ref={previewContainerRef} className="flex flex-col items-center">
+                    <div className="text-slate-400 mt-20 animate-pulse">Menyiapkan pratinjau...</div>
                   </div>
                 </div>
               </div>
