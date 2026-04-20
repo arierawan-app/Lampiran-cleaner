@@ -142,6 +142,7 @@
               line.items.sort((a, b) => a.x - b.x);
               const fullText = line.items.map(i => i.text.trim()).join(' ');
               const cleanText = fullText.toLowerCase().replace(/\s+/g, '');
+              const lowerText = fullText.toLowerCase().trim();
               const y = line.y;
 
               // 1. Deteksi Judul Tabel (Penting untuk dipertahankan)
@@ -159,33 +160,33 @@
                  }
               }
 
-              // 2.5 Deteksi Akhir Tabel (Jumlah) sebagai Proteksi Bawah Tabel
+              // 3. Deteksi Akhir Tabel (Jumlah) sebagai Pelindung Bawah Tabel
               if (cleanText.includes("jumlah") && !cleanText.includes("halaman")) {
                  if (lowestJumlahY === null || y < lowestJumlahY) {
                      lowestJumlahY = y;
                  }
               }
 
-              // 3. Deteksi Jangkar Tanda Tangan (Keyword Mutlak Sesuai Arahan)
-              const hasAnRegex = /(^|\s)a\.?\s*n\.?(\s|$)/i.test(fullText);
-              const hasMenteriKeuangan = cleanText.includes("menterikeuangan") && !cleanText.includes("keputusan");
+              // 4. Deteksi Jangkar Tanda Tangan (Sangat Robust dan Mutlak)
+              // Menghapus regex lama yang salah mendeteksi pecahan kata "an" (seperti dari "Bangunan")
+              const isAnStandalone = lowerText === "a.n." || lowerText === "a.n";
+              const hasAnMenteri = cleanText.includes("a.nmenteri") || cleanText.includes("an.menteri") || cleanText.includes("a.nkepala");
+              const hasMenteriKeuangan = cleanText.includes("menterikeuangan") && !cleanText.includes("keputusan") && !cleanText.includes("kementerian");
               const hasKepalaKantor = cleanText.includes("kepalakantorpelayanan");
               const hasDitandatangani = cleanText.includes("ditandatanganisecara");
               const hasGamal = cleanText.includes("gamalhanif");
               const hasArimbawa = cleanText.includes("arimbawa");
 
-              if (hasAnRegex || hasMenteriKeuangan || hasKepalaKantor || hasDitandatangani || hasGamal || hasArimbawa) {
+              if (isAnStandalone || hasAnMenteri || hasMenteriKeuangan || hasKepalaKantor || hasDitandatangani || hasGamal || hasArimbawa) {
                 signatureYCandidates.push(y);
               }
             });
 
-            // 4. Filter Jangkar Tanda Tangan agar tidak salah mendeteksi Header/Judul Tabel
+            // Filter Jangkar agar tidak memakan judul / isi tabel secara keliru
             let signatureAnchorY = null;
             let validSignatureYs = signatureYCandidates.filter(sy => {
-                // Mencegah judul tabel terhapus jika ada kata kunci di header
                 if (tableTitleY !== null && sy > tableTitleY - 40) return false;
                 if (headerY !== null && sy > headerY - 40) return false;
-                // Mencegah data dalam tabel (di atas baris JUMLAH) terdeteksi sebagai tanda tangan
                 if (lowestJumlahY !== null && sy > lowestJumlahY - 5) return false;
                 return true;
             });
@@ -200,8 +201,7 @@
             if (headerY !== null || tableTitleY !== null) {
               let redactionBottom;
               if (tableTitleY !== null) {
-                // Berhenti 15 poin tepat di ATAS judul tabel agar tabel sama sekali tidak tersentuh
-                redactionBottom = tableTitleY + 15;
+                redactionBottom = tableTitleY + 15; // Berhenti 15 poin di atas judul
               } else if (headerY !== null) {
                 redactionBottom = headerY - 15;
               } else {
@@ -219,25 +219,22 @@
             }
             
             // REDAKSI FOOTER / TANDA TANGAN:
-            let redactionTop = 40; // Default: Bersihkan nomor halaman di bawah
+            let redactionTop = 40; // Default: Bersihkan nomor halaman
 
             if (signatureAnchorY !== null) {
-              // Sapu bersih dari dasar kertas (y=0) hingga menutupi teks. 
-              // Karena Y adalah baseline (titik pijak) teks, +18 poin sudah sangat pas 
-              // untuk menutupi bagian pucuk/atas huruf kapital secara sempurna.
-              redactionTop = Math.max(redactionTop, signatureAnchorY + 18); 
+              // Margin dikembalikan ke +22. Cukup untuk menutupi teks tanda tangan
+              // namun tidak akan over-reaching dan menelan tabel di atasnya!
+              redactionTop = Math.max(redactionTop, signatureAnchorY + 22); 
             }
 
-            // Lapis Keamanan Akhir: Kotak putih dari bawah jangan sampai menutupi Judul Tabel!
-            if (tableTitleY !== null && redactionTop > tableTitleY - 20) {
-              redactionTop = tableTitleY - 20;
-            }
-
-            // Lapis Keamanan Ekstra: Jangan sampai memakan baris "Jumlah" pada tabel.
-            // Margin ini dikurangi drastis menjadi -4 agar kotak putih bisa naik sedekat mungkin 
-            // dengan baris "Jumlah" untuk menelan sisa teks tanda tangan tanpa menghapus teks Jumlah itu sendiri.
+            // Lapis Keamanan 1: JUMLAH
             if (lowestJumlahY !== null && redactionTop > lowestJumlahY - 4) {
               redactionTop = lowestJumlahY - 4;
+            }
+
+            // Lapis Keamanan 2: Judul Tabel
+            if (tableTitleY !== null && redactionTop > tableTitleY - 20) {
+              redactionTop = tableTitleY - 20;
             }
 
             if (redactionTop > 0) {
@@ -346,7 +343,7 @@
                 <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
               </div>
               <h2 className="text-3xl font-bold text-slate-900">PDF Lampiran Generator</h2>
-              <p className="text-slate-600 mt-2">Menghapus Lampiran & Tanda Tangan.</p>
+              <p className="text-slate-600 mt-2">Menghapus Lampiran & Tanda Tangan Secara Tuntas.</p>
             </div>
 
             <div 
